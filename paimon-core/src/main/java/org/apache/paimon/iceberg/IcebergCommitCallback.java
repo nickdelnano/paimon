@@ -343,8 +343,11 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
                         pathFactory.toManifestListPath(manifestListFileName).toString(),
                         schemaId);
 
+        // Only create tags that point to a valid snapshot. Otherwise an Iceberg client fails to read any snapshot.
+        // The only snapshot added is latest snapshotId.
         Map<String, IcebergRef> icebergTags =
                 table.tagManager().tags().entrySet().stream()
+                        .filter(entry -> entry.getKey().id() == snapshotId)
                         .collect(
                                 Collectors.toMap(
                                         entry -> entry.getValue().get(0),
@@ -602,6 +605,7 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
                         pathFactory.toManifestListPath(manifestListFileName).toString(),
                         schemaId));
 
+        // TODO expire-snapshots - createMetadataWithBase
         // all snapshots in this list, except the last one, need to expire
         List<IcebergSnapshot> toExpireExceptLast = new ArrayList<>();
         for (int i = 0; i + 1 < snapshots.size(); i++) {
