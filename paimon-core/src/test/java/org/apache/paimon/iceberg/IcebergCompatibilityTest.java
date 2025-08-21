@@ -930,10 +930,10 @@ public class IcebergCompatibilityTest {
     /*
     Create a snapshot and tag
     Delete Iceberg metadata
-    Commit again and verify that Iceberg metadata and tags are created
+    Commit again and verify that Iceberg refs are empty
      */
     @Test
-    public void testTagsCreateMetadataWithoutBase() throws Exception {
+    public void testTagsCreateMetadataWithoutBaseDoesNotIncludeAnyRefs() throws Exception {
         RowType rowType =
                 RowType.of(
                         new DataType[] {DataTypes.INT(), DataTypes.INT()}, new String[] {"k", "v"});
@@ -988,8 +988,7 @@ public class IcebergCompatibilityTest {
 
         Map<String, IcebergRef> refsAfterMetadataDelete =
                 getRefsFromSnapshot(table, table.snapshotManager().latestSnapshotId());
-        assertThat(refsAfterMetadataDelete.size() == 1).isTrue();
-        assertThat(refsAfterMetadataDelete.get(tagV1).snapshotId() == 1).isTrue();
+        assertThat(refsAfterMetadataDelete.size() == 0).isTrue();
     }
 
     private Map<String, IcebergRef> getRefsFromSnapshot(FileStoreTable table, long snapshotId) {
