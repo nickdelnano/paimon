@@ -343,11 +343,11 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
                         pathFactory.toManifestListPath(manifestListFileName).toString(),
                         schemaId);
 
-        // Iceberg tags must point to a snapshot ID that exists in the Iceberg table. Otherwise an Iceberg client fails to read _any_ snapshot.
+        // Tags can only be included in Iceberg if they point to an Iceberg snapshot that exists. Otherwise an Iceberg client fails to read _any_ snapshot.
         // Only the latest snapshot ID is added to Iceberg in this code path. Since this snapshot has just been committed to Paimon, it is not possible for any Paimon tag to reference it yet.
         // Therefore refs is empty.
         // After https://github.com/apache/paimon/issues/6107 we can add tags here.
-        Map<String, IcebergRef> icebergTags = new HashMap<>();
+        Map<String, IcebergRef> refs = new HashMap<>();
 
         String tableUuid = UUID.randomUUID().toString();
 
@@ -373,7 +373,7 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
                                         IcebergPartitionField.FIRST_FIELD_ID - 1),
                         Collections.singletonList(snapshot),
                         (int) snapshotId,
-                        icebergTags);
+                        refs);
 
         Path metadataPath = pathFactory.toMetadataPath(snapshotId);
         table.fileIO().tryToWriteAtomic(metadataPath, metadata.toJson());
@@ -601,7 +601,6 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
                         pathFactory.toManifestListPath(manifestListFileName).toString(),
                         schemaId));
 
-        // TODO expire-snapshots - createMetadataWithBase
         // all snapshots in this list, except the last one, need to expire
         List<IcebergSnapshot> toExpireExceptLast = new ArrayList<>();
         for (int i = 0; i + 1 < snapshots.size(); i++) {
@@ -613,6 +612,18 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
                 break;
             }
         }
+
+        // Tags can only be included in Iceberg if they point to an Iceberg snapshot that exists. Otherwise an Iceberg client fails to read _any_ snapshot.
+        Set<Long> snapshotIds = snapshots.stream()
+                .map(IcebergSnapshot::snapshotId)
+                .collect(Collectors.toSet());
+        Map<String, IcebergRef> refs =
+                table.tagManager().tags().entrySet().stream()
+                        .filter(entry -> snapshotIds.contains(entry.getKey().id()))
+                        .collect(
+                                Collectors.toMap(
+                                        entry -> entry.getValue().get(0),
+                                        entry -> new IcebergRef(entry.getKey().id())));
 
         IcebergMetadata metadata =
                 new IcebergMetadata(
@@ -627,7 +638,7 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
                         baseMetadata.lastPartitionId(),
                         snapshots,
                         (int) snapshotId,
-                        baseMetadata.refs());
+                        refs);
 
         Path metadataPath = pathFactory.toMetadataPath(snapshotId);
         table.fileIO().tryToWriteAtomic(metadataPath, metadata.toJson());
@@ -1030,6 +1041,8 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
             IcebergMetadata baseMetadata =
                     IcebergMetadata.fromPath(table.fileIO(), baseMetadataPath);
 
+            // TODO:  check that snapshot exists
+            // TODO:  add test
             baseMetadata.refs().put(tagName, new IcebergRef(snapshotId));
 
             IcebergMetadata metadata =
