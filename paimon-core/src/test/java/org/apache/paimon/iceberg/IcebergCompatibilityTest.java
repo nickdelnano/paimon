@@ -965,9 +965,12 @@ public class IcebergCompatibilityTest {
         commit.close();
     }
 
-    // TODO
+    // Create snapshots and Iceberg metadata
+    // Delete Iceberg metadata
+    // Create a snapshot to create Iceberg metadata
+    // Create tag on a snapshot that does not exist in Iceberg - this should not add a tag.
     @Test
-    public void testCreateTagOnlyAddsTagIfSnapshotExistsInIceberg() throws Exception {
+    public void testTagCallbackDoesNotAddTagIfSnapshotDoesNotExistInIceberg() throws Exception {
         RowType rowType =
                 RowType.of(
                         new DataType[] {DataTypes.INT(), DataTypes.INT()}, new String[] {"k", "v"});
@@ -983,9 +986,25 @@ public class IcebergCompatibilityTest {
         write.write(GenericRow.of(2, 20));
         commit.commit(1, write.prepareCommit(false, 1));
 
+        // Delete iceberg metadata
+        Path metadataPath = new Path(table.location(), "metadata");
+        table.fileIO().deleteDirectoryQuietly(metadataPath);
 
-        // TODO
+        write.write(GenericRow.of(3, 30));
+        write.write(GenericRow.of(4, 40));
+        write.compact(BinaryRow.EMPTY_ROW, 0, true);
+        commit.commit(2, write.prepareCommit(true, 2));
 
+        String tagV1 = "v1";
+        long tagV1SnapshotId = 1;
+        table.createTag(tagV1, tagV1SnapshotId);
+
+        assertThat(getIcebergResult())
+                .containsExactlyInAnyOrder(
+                        "Record(1, 10)", "Record(2, 20)", "Record(3, 30)", "Record(4, 40)");
+
+
+        assertThat(getIcebergRefsFromSnapshot(table, table.snapshotManager().latestSnapshotId()).size() == 0).isTrue();
 
         write.close();
         commit.close();
