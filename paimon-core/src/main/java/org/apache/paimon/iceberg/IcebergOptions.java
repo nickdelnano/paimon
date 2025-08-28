@@ -66,6 +66,13 @@ public class IcebergOptions {
                     .withDescription(
                             "Whether to delete old metadata files after each table commit");
 
+    public static final ConfigOption<Boolean> FULL_SNAPSHOT_HISTORY =
+            key("metadata.iceberg.full-snapshot-history.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to sync all Paimon snapshots to Iceberg table after enabling Iceberg compatibility");
+
     public static final ConfigOption<Integer> METADATA_PREVIOUS_VERSIONS_MAX =
             key("metadata.iceberg.previous-versions-max")
                     .intType()

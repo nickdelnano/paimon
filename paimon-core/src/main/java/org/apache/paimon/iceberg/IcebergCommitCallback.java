@@ -240,7 +240,17 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
             if (table.fileIO().exists(baseMetadataPath)) {
                 createMetadataWithBase(fileChangesCollector, snapshotId, baseMetadataPath);
             } else {
-                createMetadataWithoutBase(snapshotId);
+                Options options = new Options(table.options());
+
+                // Previous snapshot does not exist in Iceberg. Check whether we will
+                // sync all Paimon snapshots or only the latest and complete it.
+                if (!options.get(IcebergOptions.FULL_SNAPSHOT_HISTORY)) {
+                    createMetadataWithoutBase(snapshotId);
+                }
+                else {
+                    long earliestSnapshot = table.snapshotManager().earliestSnapshot().id();
+                    createMetadataWithoutBase(snapshotId, earliestSnapshot, fileChangesCollector);
+                }
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -250,61 +260,81 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
     // -------------------------------------------------------------------------------------
     // Create metadata afresh
     // -------------------------------------------------------------------------------------
-
     private void createMetadataWithoutBase(long snapshotId) throws IOException {
-        SnapshotReader snapshotReader = table.newSnapshotReader().withSnapshot(snapshotId);
-        SchemaCache schemaCache = new SchemaCache();
-        Iterator<IcebergManifestEntry> entryIterator =
-                snapshotReader.read().dataSplits().stream()
-                        .filter(DataSplit::rawConvertible)
-                        .flatMap(
-                                s ->
-                                        dataSplitToManifestEntries(s, snapshotId, schemaCache)
-                                                .stream())
-                        .iterator();
-        List<IcebergManifestFileMeta> manifestFileMetas =
-                manifestFile.rollingWrite(entryIterator, snapshotId);
-        String manifestListFileName = manifestList.writeWithoutRolling(manifestFileMetas);
+        createMetadataWithoutBase(snapshotId, snapshotId, null);
+    }
 
-        int schemaId = (int) table.schema().id();
-        IcebergSchema icebergSchema = schemaCache.get(schemaId);
-        List<IcebergPartitionField> partitionFields =
-                getPartitionFields(table.schema().partitionKeys(), icebergSchema);
-        IcebergSnapshot snapshot =
-                new IcebergSnapshot(
-                        snapshotId,
-                        snapshotId,
-                        System.currentTimeMillis(),
-                        IcebergSnapshotSummary.APPEND,
-                        pathFactory.toManifestListPath(manifestListFileName).toString(),
-                        schemaId);
+    private void createMetadataWithoutBase(long snapshotId, long earliestSnapshot, FileChangesCollector fileChangesCollector) throws IOException {
+        IcebergMetadata metadata = null;
+        List<IcebergSnapshot> snapshots = new ArrayList<>();
 
-        Map<String, IcebergRef> icebergTags =
-                table.tagManager().tags().entrySet().stream()
-                        .collect(
-                                Collectors.toMap(
-                                        entry -> entry.getValue().get(0),
-                                        entry -> new IcebergRef(entry.getKey().id())));
+        // Specific behavior of i=snapshotId ... APPEND of latest Paimon snapshot
+        // With many snapshots, first do this for i=earliestSnapshot and then generate new manifest files
+        // ^ TODO requires-code-update
+        for (long i = earliestSnapshot; i < snapshotId ; i++) {
+            final long copyLong = i;
+            // TODO snapshot-specific
+            SnapshotReader snapshotReader = table.newSnapshotReader().withSnapshot(i);
+            SchemaCache schemaCache = new SchemaCache();
+            Iterator<IcebergManifestEntry> entryIterator =
+                    snapshotReader.read().dataSplits().stream()
+                            .filter(DataSplit::rawConvertible)
+                            .flatMap(
+                                    s ->
+                                            dataSplitToManifestEntries(s, copyLong, schemaCache)
+                                                    .stream())
+                            .iterator();
+            List<IcebergManifestFileMeta> manifestFileMetas =
+                    manifestFile.rollingWrite(entryIterator, i);
+            String manifestListFileName = manifestList.writeWithoutRolling(manifestFileMetas);
 
-        String tableUuid = UUID.randomUUID().toString();
-        IcebergMetadata metadata =
-                new IcebergMetadata(
-                        tableUuid,
-                        table.location().toString(),
-                        snapshotId,
-                        icebergSchema.highestFieldId(),
-                        Collections.singletonList(icebergSchema),
-                        schemaId,
-                        Collections.singletonList(new IcebergPartitionSpec(partitionFields)),
-                        partitionFields.stream()
-                                .mapToInt(IcebergPartitionField::fieldId)
-                                .max()
-                                .orElse(
-                                        // not sure why, this is a result tested by hand
-                                        IcebergPartitionField.FIRST_FIELD_ID - 1),
-                        Collections.singletonList(snapshot),
-                        (int) snapshotId,
-                        icebergTags);
+            // TODO snapshot-specific
+            int schemaId = (int) table.schema().id();
+            IcebergSchema icebergSchema = schemaCache.get(i);
+            // TODO snapshot-specific? or immutable
+            List<IcebergPartitionField> partitionFields =
+                    getPartitionFields(table.schema().partitionKeys(), icebergSchema);
+            IcebergSnapshot snapshot =
+                    new IcebergSnapshot(
+                            snapshotId,
+                            snapshotId,
+                            System.currentTimeMillis(),
+                            // TODO snapshot-specific
+                            IcebergSnapshotSummary.APPEND,
+                            pathFactory.toManifestListPath(manifestListFileName).toString(),
+                            schemaId);
+
+            snapshots.add(snapshot);
+
+            // Last iteration of the loop, create metadata
+            if (i == snapshotId) {
+                Map<String, IcebergRef> icebergTags =
+                        table.tagManager().tags().entrySet().stream()
+                                .collect(
+                                        Collectors.toMap(
+                                                entry -> entry.getValue().get(0),
+                                                entry -> new IcebergRef(entry.getKey().id())));
+                String tableUuid = UUID.randomUUID().toString();
+                metadata =
+                        new IcebergMetadata(
+                                tableUuid,
+                                table.location().toString(),
+                                snapshotId,
+                                icebergSchema.highestFieldId(),
+                                Collections.singletonList(icebergSchema),
+                                schemaId,
+                                Collections.singletonList(new IcebergPartitionSpec(partitionFields)),
+                                partitionFields.stream()
+                                        .mapToInt(IcebergPartitionField::fieldId)
+                                        .max()
+                                        .orElse(
+                                                // not sure why, this is a result tested by hand
+                                                IcebergPartitionField.FIRST_FIELD_ID - 1),
+                                snapshots,
+                                (int) snapshotId,
+                                icebergTags);
+            }
+        }
 
         Path metadataPath = pathFactory.toMetadataPath(snapshotId);
         table.fileIO().tryToWriteAtomic(metadataPath, metadata.toJson());
@@ -792,6 +822,8 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
                 }
                 table.fileIO().deleteQuietly(listPath);
             }
+
+            // TODO if we have created metadata from base then we'd want to delete all metadata files before
             deleteApplicableMetadataFiles(snapshotId);
         }
     }
