@@ -321,6 +321,7 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
                                 table.location().toString(),
                                 snapshotId,
                                 icebergSchema.highestFieldId(),
+                                // TODO this needs to be a list of all schemas
                                 Collections.singletonList(icebergSchema),
                                 schemaId,
                                 Collections.singletonList(new IcebergPartitionSpec(partitionFields)),
@@ -408,6 +409,7 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
 
         Map<String, BinaryRow> removedFiles = new LinkedHashMap<>();
         Map<String, Pair<BinaryRow, DataFileMeta>> addedFiles = new LinkedHashMap<>();
+        // TODO Need to get removedFiles, addedFiles, from each snapshot
         boolean isAddOnly = fileChangesCollector.collect(removedFiles, addedFiles);
         Set<BinaryRow> modifiedPartitionsSet = new LinkedHashSet<>(removedFiles.values());
         modifiedPartitionsSet.addAll(
@@ -422,7 +424,7 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
         IcebergSnapshotSummary snapshotSummary;
         if (isAddOnly) {
             // Fast case. We don't need to remove files from `baseMetadata`. We only need to append
-            // new metadata files.
+            // new manifest files.
             newManifestFileMetas = new ArrayList<>(baseManifestFileMetas);
             newManifestFileMetas.addAll(createNewlyAddedManifestFileMetas(addedFiles, snapshotId));
             snapshotSummary = IcebergSnapshotSummary.APPEND;
@@ -437,6 +439,8 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
             newManifestFileMetas = result.getLeft();
             snapshotSummary = result.getRight();
         }
+
+        // TODO call-once
         String manifestListFileName =
                 manifestList.writeWithoutRolling(
                         compactMetadataIfNeeded(newManifestFileMetas, snapshotId));
@@ -487,6 +491,7 @@ public class IcebergCommitCallback implements CommitCallback, TagCallback {
                         (int) snapshotId,
                         baseMetadata.refs());
 
+        // TODO call-once
         Path metadataPath = pathFactory.toMetadataPath(snapshotId);
         table.fileIO().tryToWriteAtomic(metadataPath, metadata.toJson());
         table.fileIO()
