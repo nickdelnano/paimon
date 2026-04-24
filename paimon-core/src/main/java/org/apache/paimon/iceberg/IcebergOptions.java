@@ -136,15 +136,19 @@ public class IcebergOptions {
                     .noDefaultValue()
                     .withDescription(
                             "Metastore database name for Iceberg Catalog. "
-                                    + "Set this as an iceberg database alias if using a centralized Catalog.");
+                                    + "Set this as an iceberg database alias if using a centralized Catalog. "
+                                    + "Multiple values can be separated by semicolons (e.g., 'db1;db2') "
+                                    + "to register the table in multiple Hive databases.");
 
     public static final ConfigOption<String> METASTORE_TABLE =
             key("metadata.iceberg.table")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "Metastore table name for Iceberg Catalog."
-                                    + "Set this as an iceberg table alias if using a centralized Catalog.");
+                            "Metastore table name for Iceberg Catalog. "
+                                    + "Set this as an iceberg table alias if using a centralized Catalog. "
+                                    + "Multiple values can be separated by semicolons (e.g., 't1;t2') "
+                                    + "to register the table under multiple Hive table names.");
 
     public static final ConfigOption<Boolean> GLUE_SKIP_ARCHIVE =
             key("metadata.iceberg.glue.skip-archive")

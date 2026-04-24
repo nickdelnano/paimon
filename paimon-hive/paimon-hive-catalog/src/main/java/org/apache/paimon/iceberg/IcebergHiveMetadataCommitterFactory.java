@@ -18,7 +18,15 @@
 
 package org.apache.paimon.iceberg;
 
+import org.apache.paimon.options.Options;
 import org.apache.paimon.table.FileStoreTable;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /** Factory to create {@link IcebergHiveMetadataCommitter}. */
 public class IcebergHiveMetadataCommitterFactory implements IcebergMetadataCommitterFactory {
@@ -30,6 +38,54 @@ public class IcebergHiveMetadataCommitterFactory implements IcebergMetadataCommi
 
     @Override
     public IcebergMetadataCommitter create(FileStoreTable table) {
-        return new IcebergHiveMetadataCommitter(table);
+        Options options = new Options(table.options());
+        String databaseConfig = options.get(IcebergOptions.METASTORE_DATABASE);
+        String tableConfig = options.get(IcebergOptions.METASTORE_TABLE);
+
+        List<String> databases = splitAndTrim(databaseConfig);
+        List<String> tables = splitAndTrim(tableConfig);
+
+        if (databases.size() <= 1 && tables.size() <= 1) {
+            return new IcebergHiveMetadataCommitter(table);
+        }
+
+        if (databases.size() > 1 && tables.size() > 1 && databases.size() != tables.size()) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "When both '%s' and '%s' specify multiple values, "
+                                    + "they must have the same number of entries. Got %d databases and %d tables.",
+                            IcebergOptions.METASTORE_DATABASE.key(),
+                            IcebergOptions.METASTORE_TABLE.key(),
+                            databases.size(),
+                            tables.size()));
+        }
+
+        int count = Math.max(databases.size(), tables.size());
+        List<IcebergHiveMetadataCommitter> committers = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            Map<String, String> overrides = new HashMap<>();
+            if (!databases.isEmpty()) {
+                overrides.put(
+                        IcebergOptions.METASTORE_DATABASE.key(),
+                        databases.get(i < databases.size() ? i : 0));
+            }
+            if (!tables.isEmpty()) {
+                overrides.put(
+                        IcebergOptions.METASTORE_TABLE.key(),
+                        tables.get(i < tables.size() ? i : 0));
+            }
+            committers.add(new IcebergHiveMetadataCommitter(table.copy(overrides)));
+        }
+        return new IcebergMultiTargetHiveMetadataCommitter(committers);
+    }
+
+    static List<String> splitAndTrim(String value) {
+        if (value == null || value.isEmpty()) {
+            return new ArrayList<>();
+        }
+        return Arrays.stream(value.split(";"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toList());
     }
 }

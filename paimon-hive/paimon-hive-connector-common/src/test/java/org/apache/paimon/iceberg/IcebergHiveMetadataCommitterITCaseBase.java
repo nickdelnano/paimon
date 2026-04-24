@@ -63,6 +63,8 @@ public abstract class IcebergHiveMetadataCommitterITCaseBase {
     public void after() {
         hiveShell.execute("DROP DATABASE IF EXISTS test_db CASCADE");
         hiveShell.execute("DROP DATABASE IF EXISTS test_db_iceberg CASCADE");
+        hiveShell.execute("DROP DATABASE IF EXISTS iceberg_db1 CASCADE");
+        hiveShell.execute("DROP DATABASE IF EXISTS iceberg_db2 CASCADE");
     }
 
     @Test
@@ -243,6 +245,85 @@ public abstract class IcebergHiveMetadataCommitterITCaseBase {
                 collect(
                         tEnv.executeSql(
                                 "SELECT data, id, pt FROM my_iceberg.test_db_iceberg.t1_iceberg WHERE id > 1 ORDER BY pt, id")));
+    }
+
+    @Test
+    public void testMultiTargetAppendOnlyTable() throws Exception {
+        TableEnvironment tEnv =
+                TableEnvironmentImpl.create(
+                        EnvironmentSettings.newInstance().inBatchMode().build());
+        tEnv.executeSql(
+                "CREATE CATALOG my_paimon WITH ( 'type' = 'paimon', 'warehouse' = '"
+                        + path
+                        + "' )");
+        tEnv.executeSql("CREATE DATABASE my_paimon.test_db");
+        tEnv.executeSql(
+                "CREATE TABLE my_paimon.test_db.t_multi ( pt INT, id INT, data STRING ) PARTITIONED BY (pt) WITH "
+                        + "( 'metadata.iceberg.storage' = 'hive-catalog', 'metadata.iceberg.uri' = '', 'file.format' = 'avro', "
+                        + "'metadata.iceberg.database' = 'iceberg_db1;iceberg_db2', "
+                        + "'metadata.iceberg.table' = 'ice_t1;ice_t2')");
+        tEnv.executeSql(
+                        "INSERT INTO my_paimon.test_db.t_multi VALUES "
+                                + "(1, 1, 'apple'), (1, 2, 'pear'), (2, 1, 'cat'), (2, 2, 'dog')")
+                .await();
+
+        tEnv.executeSql(
+                "CREATE CATALOG my_iceberg WITH "
+                        + "( 'type' = 'iceberg', 'catalog-type' = 'hive', 'uri' = '', 'warehouse' = '"
+                        + path
+                        + "', 'cache-enabled' = 'false' )");
+
+        // verify first target
+        assertEquals(
+                Arrays.asList(
+                        Row.of(1, 1, "apple"),
+                        Row.of(1, 2, "pear"),
+                        Row.of(2, 1, "cat"),
+                        Row.of(2, 2, "dog")),
+                collect(
+                        tEnv.executeSql(
+                                "SELECT * FROM my_iceberg.iceberg_db1.ice_t1 ORDER BY pt, id")));
+
+        // verify second target has the same data
+        assertEquals(
+                Arrays.asList(
+                        Row.of(1, 1, "apple"),
+                        Row.of(1, 2, "pear"),
+                        Row.of(2, 1, "cat"),
+                        Row.of(2, 2, "dog")),
+                collect(
+                        tEnv.executeSql(
+                                "SELECT * FROM my_iceberg.iceberg_db2.ice_t2 ORDER BY pt, id")));
+
+        // insert more data and verify both targets are updated
+        tEnv.executeSql(
+                        "INSERT INTO my_paimon.test_db.t_multi VALUES "
+                                + "(1, 3, 'cherry'), (2, 3, 'elephant')")
+                .await();
+
+        assertEquals(
+                Arrays.asList(
+                        Row.of(1, 1, "apple"),
+                        Row.of(1, 2, "pear"),
+                        Row.of(1, 3, "cherry"),
+                        Row.of(2, 1, "cat"),
+                        Row.of(2, 2, "dog"),
+                        Row.of(2, 3, "elephant")),
+                collect(
+                        tEnv.executeSql(
+                                "SELECT * FROM my_iceberg.iceberg_db1.ice_t1 ORDER BY pt, id")));
+
+        assertEquals(
+                Arrays.asList(
+                        Row.of(1, 1, "apple"),
+                        Row.of(1, 2, "pear"),
+                        Row.of(1, 3, "cherry"),
+                        Row.of(2, 1, "cat"),
+                        Row.of(2, 2, "dog"),
+                        Row.of(2, 3, "elephant")),
+                collect(
+                        tEnv.executeSql(
+                                "SELECT * FROM my_iceberg.iceberg_db2.ice_t2 ORDER BY pt, id")));
     }
 
     @Test
